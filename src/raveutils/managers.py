@@ -61,6 +61,31 @@
 #        empty[attr] = True
 #    return np.all(empty.values())
 
+class ManagerBase(object):
+  # TODO: remove object?
+  def __init__(self, config_uri):
+    # Parse config file
+    yaml_path = resource_retriever.get_filename(config_uri, use_protocol=False)
+    with open(yaml_path) as f:
+      config = yaml.load(f)
+    # TODO: only crucial sub-classes
+    if not cu.misc.has_keys(config, ['environment', 'robot', 'planning', 'execution']):
+      raise IOError('Failed to load config file: {}'.format(config_uri))
+
+    # Retrieve all classes in config file
+    # TODO
+    # Give user warning to load registered non-crucial sub-classes
+    # on their own.
+    # TODO
+    # Start only the crucial sub-classes
+    self.env = orpy.Environment()
+    self.env_mng = EnvironmentManager(config['environment'], self.env)
+    # RobotManager
+    # TODO self.rbt_mng = EnvironmentManager(config['robot'])
+    self.pln_mng = EnvironmentManager(config['planning'],
+                   env_manager = self.env_mng)
+    self.exe_mng = EnvironmentManager(config['execution'], self.pln_mng)
+
 #class CollisionManager():
 #  NO_COLLISION = 0
 #  SELF_COLLISION = 1
