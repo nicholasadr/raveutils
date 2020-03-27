@@ -87,64 +87,95 @@ class ManagerBase(object):
     #TODO:self.rbt_mng = RobotManager(config['robot'])
     #self.exe_mng = EnvironmentManager(config['execution'], self.pln_mng)
 
-#class CollisionManager():
-#  NO_COLLISION = 0
-#  SELF_COLLISION = 1
-#  ENV_COLLISION = 2
-#  def __init__(self, env, checker_name):
-#    self.env = env
-#    self.collision_checking_enabled = False
-#    self.alive_bodies = criros.raveutils.get_enabled_bodies(self.env)
-#    self.change_collision_checker(checker_name)
-#
-#  def change_collision_checker(self, checker_name):
-#    self.checker_name = checker_name
-#    self.collision_checker = orpy.RaveCreateCollisionChecker(self.env, checker_name)
-#
-#  def check_robot_collisions(self, robot_name, qconfig):
-#    robot = self.env.GetRobot(robot_name)
-#    was_enable = self.collision_checking_enabled
-#    self.enable_collision_checking(True)
-#    qinit = robot.GetActiveDOFValues()
-#    # Check collisions
-#    collision_code = self.NO_COLLISION
-#    with self.env:
-#      robot.SetActiveDOFValues(qconfig)
-#      if robot.CheckSelfCollision():
-#        collision_code = self.SELF_COLLISION
-#      if self.env.CheckCollision(robot):
-#        collision_code = self.ENV_COLLISION
-#    # Restore the robot position
-#    with self.env:
-#      robot.SetActiveDOFValues(qinit)
-#    self.enable_collision_checking(was_enable)
-#    return collision_code
-#
-#  def enable_collision_checking(self, enable):
-#    # Avoid executing this method unnecessarily
-#    if self.collision_checking_enabled == enable:
-#      return
-#    # Check we have created a valid collision checker
-#    if self.collision_checker is None:
-#      return False
-#    # Include bodies that were added to the environment since last time we checked
-#    current_enabled = criros.raveutils.get_enabled_bodies(self.env)
-#    if self.alive_bodies != current_enabled:
-#      self.alive_bodies = self.alive_bodies.union(current_enabled)
-#    # Enable/disable bodies
-#    for name in self.alive_bodies:
-#      criros.raveutils.enable_body(self.env.GetKinBody(name), enable)
-#    # Configure environment collision checker
-#    with self.env:
-#      if enable:
-#        self.collision_checking_enabled = self.env.SetCollisionChecker(self.collision_checker)
-#      else:
-#        self.env.SetCollisionChecker(None)
-#        self.collision_checking_enabled = False
-#    return (enable == self.collision_checking_enabled)
-#
-#  def get_checker_name(self):
-#    return self.checker_name
+class CollisionManager():
+  NO_COLLISION = 0
+  SELF_COLLISION = 1
+  ENV_COLLISION = 2
+  def __init__(self, env, checker_name):
+    self.env = env
+    self.collision_checking_enabled = False
+    self.alive_bodies = self.get_enabled_bodies()
+    self.change_collision_checker(checker_name)
+
+  def change_collision_checker(self, checker_name):
+    self.checker_name = checker_name
+    self.collision_checker = orpy.RaveCreateCollisionChecker(self.env, checker_name)
+
+  def check_robot_collisions(self, robot_name, qconfig):
+    robot = self.env.GetRobot(robot_name)
+    was_enable = self.collision_checking_enabled
+    self.enable_collision_checking(True)
+    qinit = robot.GetActiveDOFValues()
+    # Check collisions
+    collision_code = self.NO_COLLISION
+    with self.env:
+      robot.SetActiveDOFValues(qconfig)
+      if robot.CheckSelfCollision():
+        collision_code = self.SELF_COLLISION
+      if self.env.CheckCollision(robot):
+        collision_code = self.ENV_COLLISION
+    # Restore the robot position
+    with self.env:
+      robot.SetActiveDOFValues(qinit)
+    self.enable_collision_checking(was_enable)
+    return collision_code
+
+  def enable_collision_checking(self, enable):
+    # Avoid executing this method unnecessarily
+    if self.collision_checking_enabled == enable:
+      return
+    # Check we have created a valid collision checker
+    if self.collision_checker is None:
+      return False
+    # Include bodies that were added to the environment since last time we checked
+    current_enabled = self.get_enabled_bodies()
+    if self.alive_bodies != current_enabled:
+      self.alive_bodies = self.alive_bodies.union(current_enabled)
+    # Enable/disable bodies
+    for name in self.alive_bodies:
+      self.enable_body(self.env.GetKinBody(name), enable)
+    # Configure environment collision checker
+    with self.env:
+      if enable:
+        self.collision_checking_enabled = self.env.SetCollisionChecker(self.collision_checker)
+      else:
+        self.env.SetCollisionChecker(None)
+        self.collision_checking_enabled = False
+    return (enable == self.collision_checking_enabled)
+
+  def get_enabled_bodies(self):
+    # TODO: Modify docstring format
+    """
+    Returns a C{set} with the names of the bodies enabled in the given environment
+    @type  env: orpy.Environment
+    @param env: The OpenRAVE environment
+    @rtype: set
+    @return: The names of the enabled bodies
+    """
+    enabled_bodies = []
+    with self.env:
+      for body in self.env.GetBodies():
+        if body.IsEnabled():
+          enabled_bodies.append(body.GetName())
+    return set(enabled_bodies)
+
+  def enable_body(self, body, enable):
+    """
+    Enables all the links of a body.
+
+    Parameters
+    ----------
+    body: orpy.KinBody
+      The OpenRAVE body
+    enable: bool
+     If true, will enable all the links.
+    """
+    with self.env:
+      for link in body.GetLinks():
+        link.Enable(enable)
+
+  def get_checker_name(self):
+    return self.checker_name
 
 class EnvironmentManager():
   #joint_names = ['j1','j2','j3','j4','j5','j6']
@@ -748,9 +779,9 @@ class PlanningManager():
       self.env = env
       self.env_manager = env_manager
     # Configure environment collision checker
-#    self.collision = CollisionManager(self.env, config['collision_checker'])
-#    if not self.collision.enable_collision_checking(True):
-#      self.logger.logwarn( 'Failed to enable collision checker: {0}'.format(self.collision.get_checker_name()) )
+    self.collision = CollisionManager(self.env, config['collision_checker'])
+    if not self.collision.enable_collision_checking(True):
+      self.logger.logwarn( 'Failed to enable collision checker: {0}'.format(self.collision.get_checker_name()) )
     # NOTE: Why involve rosmsg? My guess is to make it publishable
     # Load the default planning options
     self.default_options = PlanningOptions()
