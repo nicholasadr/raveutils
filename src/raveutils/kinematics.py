@@ -5,7 +5,6 @@ import openravepy as orpy
 # Local modules
 import raveutils as ru
 
-
 def check_joint_limits(robot, q=None):
   """
   Check if the provided joint configuration exceeds the joint limits
@@ -188,8 +187,39 @@ def find_ik_solutions(robot, target, iktype, collision_free=True, freeinc=0.1, a
     solutions += list(manipulator.FindIKSolutions(ikparam, opt))
   return solutions
 
-def load_ikfast(robot, iktype, freejoints=['J6'], freeinc=[0.01],
+def get_ikmodel(robot, iktype, manip=None, freejoints=['J6'], freeinc=[0.01]):
+  # TODO: docstring
+
+  # Improve code readability
+  from openravepy.databases.inversekinematics import InverseKinematicsModel
+  if not (iktype == orpy.IkParameterizationType.TranslationDirection5D or
+          iktype == orpy.IkParameterizationType.Transform6D):
+    raise TypeError('Unsupported ikmodel: {}'.format(iktype.name))
+  return InverseKinematicsModel(robot, iktype=iktype, manip=manip,
+                                freejoints=freejoints)
+
+def load_ikmodel(ikmodel, iktype, autogenerate=True):
+  # TODO: docstring
+  #       Load ikmodel to get iksolver
+  if not ikmodel.load() and autogenerate:
+    print 'Generating IKFast {0}. Will take few minutes...'.format(iktype.name)
+    if iktype == orpy.IkParameterizationType.Transform6D:
+      ikmodel.autogenerate()
+    elif iktype == orpy.IkParameterizationType.TranslationDirection5D:
+      ikmodel.generate(iktype=iktype, freejoints=freejoints)
+      ikmodel.save()
+    else:
+      ikmodel.autogenerate()
+    print 'IKFast {0} has been successfully generated'.format(iktype.name)
+  if iktype == orpy.IkParameterizationType.TranslationDirection5D:
+    success = ikmodel.load(freeinc=freeinc)
+  elif iktype == orpy.IkParameterizationType.Transform6D:
+    success = ikmodel.load()
+  return success
+
+def load_ikfast(robot, iktype, manip=None, freejoints=['J6'], freeinc=[0.01],
                                                             autogenerate=True):
+  # TODO: Update docstring
   """
   Load the IKFast solver
 
@@ -210,32 +240,14 @@ def load_ikfast(robot, iktype, freejoints=['J6'], freeinc=[0.01],
   success: bool
     `True` if succeeded, `False` otherwise
   """
-  # Improve code readability
-  from openravepy.databases.inversekinematics import InverseKinematicsModel
-  # Initialize the ikmodel
-  if iktype == orpy.IkParameterizationType.TranslationDirection5D:
-    ikmodel = InverseKinematicsModel(robot, iktype=iktype,
-                                                        freejoints=freejoints)
-  elif iktype == orpy.IkParameterizationType.Transform6D:
-    ikmodel = InverseKinematicsModel(robot, iktype=iktype)
-  else:
-    raise TypeError('Unsupported ikmodel: {}'.format(iktype.name))
+  # Create an ikmodel instance
+  ikmodel = get_ikmodel(robot, iktype, manip=manip, freejoints=freejoints,
+                        freeinc=freeinc)
   # Load or generate
-  if not ikmodel.load() and autogenerate:
-    print 'Generating IKFast {0}. Will take few minutes...'.format(iktype.name)
-    if iktype == orpy.IkParameterizationType.Transform6D:
-      ikmodel.autogenerate()
-    elif iktype == orpy.IkParameterizationType.TranslationDirection5D:
-      ikmodel.generate(iktype=iktype, freejoints=freejoints)
-      ikmodel.save()
-    else:
-      ikmodel.autogenerate()
-    print 'IKFast {0} has been successfully generated'.format(iktype.name)
-  if iktype == orpy.IkParameterizationType.TranslationDirection5D:
-    success = ikmodel.load(freeinc=freeinc)
-  elif iktype == orpy.IkParameterizationType.Transform6D:
-    success = ikmodel.load()
-  return success
+  if not load_ikmodel(ikmodel, iktype, autogenerate=autogenerate):
+    print 'Fail to load ikmodel {0}'.format(iktype.name)
+    return False
+  return True
 
 def load_link_stats(robot, xyzdelta=0.01, autogenerate=True):
   """
