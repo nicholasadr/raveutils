@@ -7,6 +7,7 @@ import rospy
 #import scipy
 import criros
 import criutils
+import raveutils
 #import random
 #import tabulate
 #import itertools
@@ -245,6 +246,7 @@ class EnvironmentManager():
 
   # TODO: Move TextColors
   def environment_from_dict(self, config, logger=criros.utils.TextColors()):
+    # TODO: Modify docstring format
     """
     Loads and configures and OpenRAVE environment from a configuration dictionary.
     This approach allows to encapsulate additional information that would be tedious
@@ -760,8 +762,8 @@ class EnvironmentManager():
 #    return etree.tostring(plan, pretty_print=True)
 
 class PlanningManager():
-  PLANNERS = ['BiRRT', 'BasicRRT']
-  PP_PLANNERS = ['shortcut_linear', 'LinearTrajectoryRetimer', 'ParabolicTrajectoryRetimer', 'LinearSmoother', 'ParabolicSmoother']
+  #PLANNERS = ['BiRRT', 'BasicRRT']
+  #PP_PLANNERS = ['shortcut_linear', 'LinearTrajectoryRetimer', 'ParabolicTrajectoryRetimer', 'LinearSmoother', 'ParabolicSmoother']
   def __init__(self, config, env=None, env_manager=None, logger=rospy):
 #    self.axes = []
     self.logger = logger
@@ -784,13 +786,52 @@ class PlanningManager():
       self.logger.logwarn( 'Failed to enable collision checker: {0}'.format(self.collision.get_checker_name()) )
     # NOTE: Why involve rosmsg? My guess is to make it publishable
     # Load the default planning options
-    self.default_options = PlanningOptions()
-    genpy.message.fill_message_args(self.default_options, [config['default_options']])
-    self.default_options = self.merge_default_options(self.default_options)
+    #self.default_options = PlanningOptions()
+    #genpy.message.fill_message_args(self.default_options, [config['default_options']])
+    #self.default_options = self.merge_default_options(self.default_options)
+    # TODO: Add non-ros approach to planning options
+    # The manipulator that group the joints in OpenRAVE
+    #self.manipulator = None
+    # Available planners are in self.PLANNERS
+    self.PLANNERS = ['BiRRT', 'BasicRRT']
+    self.planner = 'BiRRT'
+    self.max_iterations = 20
+    self.velocity_factor = 0.2
+    self.acceleration_factor = 0.1
+    # IK types
+    # NOTE TRANSFORM_6D, TRANSLATION_DIRECTION_5D?
+    self.IK_TYPES = ['TranslationDirection5D', 'Transform6D']
+    #self.iktype = orpy.IkParameterization.Type.Transform6D
+    # IK selection criterion
+    self.BEST_INDEX = 1
+    self.CLOSEST = 2
+    self.ikcriterion = 2
+    # If False, the planned trajectory will be collision-free
+    self.allow_collisions = False
+    # Straight line trajectory
+    # TODO: are some of these under iktypes instead?
+    self.straight_line = None
+    self.ik_max_iterations = 5000
+    self.ik_alpha = 1.0
+    self.ik_tolerance = 1e-06
+    self.step_size = 0.002
+    self.max_distance = 0.05
+    # Post-processing
+    self.PP_PLANNERS = ['shortcut_linear', 'LinearTrajectoryRetimer', 'ParabolicTrajectoryRetimer', 'LinearSmoother', 'ParabolicSmoother']
+    self.pp_planner = 'ParabolicSmoother'
+    self.pp_iterations = 40
+    # Others
+    self.only_translation = None
+    # Parse config
+    if not self.parse_from_config(config['parameters']):
+      return None
+    # Check planning variables validity
+    self.check_planning_validity()
     # Load available IK solvers
     # NOTE: Load all available IK solvers (for all supported iktypes)
     #       for all robot-manipulator permutations
     # NOTE: Why load all iktypes for a particular robot-manipulator combi tho?
+    """
     iktypes = []
     for robot_name in config['robots'].keys():
       robot = self.env.GetRobot(robot_name)
@@ -805,30 +846,58 @@ class PlanningManager():
     self.ikmodels = dict()
     for robot_name, manip_name, iktype in iktypes:
       manip = self.env.GetRobot(robot_name).GetManipulator(manip_name)
+      # TODO: Why are we loading twice?
       ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
       if not ikmodel.load():
         self.logger.logwarn('Failed to load IKFast {0} for manip {1}'.format(iktype.name, manip_name))
       else:
         key = (robot_name, manip_name, iktype.name)
         self.ikmodels[key] = ikmodel
+    """
     # Store initial robot configuration
     self.joint_names = dict()
     self.velocity_limits = dict()
     self.acceleration_limits = dict()
     # Active manipulator parameters
-    self.iktype = dict()
+    self.iktypes = dict()
     self.dofindices = dict()
+    required_fields = ['manipulator','iktype','joint_names']
     for robot_name in config['robots'].keys():
+      if not criutils.misc.has_keys(config['robots'][robot_name], required_fields):
+        logger.logerr('Config dict does not have the required fields: {0}'.format(required_fields))
+        return None
       robot = self.env.GetRobot(robot_name)
+      if robot is None:
+        self.logger.logerr('Could not find robot in OpenRAVE: {0}'.format(robot_name))
+        return None
+      manip_name = config['robots'][robot_name]['manipulator']
+      try:
+        manip = robot.GetManipulator(manip_name)
+      except:
+	logger.logerr('Failed to find manipulator {0} of robot {1}'.format(
+	              manip_name,robot_name))
+	return None
+      iktype_name = config['robots'][robot_name]['iktype']
+      if iktype_name not in self.IK_TYPES:
+	logger.logerr('Iktype {0} of robot {1} is not supported'.format(
+	              iktype_name, robot_name))
+	return None
+      iktype = orpy.IkParameterizationType.names[iktype_name]
+      # Load available IK models
+      ikmodel = raveutils.kinematics.get_ikmodel(robot, iktype, manip=manip)
+      if not raveutils.kinematics.load_ikmodel(ikmodel, iktype, autogenerate=True):
+	logger.logerr('Failed to load IKFast for (robot, manip, iktype): {0}{1}{2}'.format(robot_name, manip, iktype))
+        return None
+      key = (robot_name, manip_name, iktype_name)
+      self.ikmodels[key] = ikmodel
       self.joint_names[robot_name] = config['robots'][robot_name]['joint_names']
       self.velocity_limits[robot_name] = robot.GetDOFVelocityLimits()
-      self.acceleration_limits[robot_name] = robot.GetDOFVelocityLimits()
-      # NOTE: In here, every robot listed in config will have to use
-      #       the same manipulator and iktype in default_options?
-      #       Maybe check if user provided specific *manipulator* and 
-      #       *iktype* options under robot?
-      self.change_active_manipulator(robot_name, self.default_options.manipulator, self.default_options.iktype)
-      # TODO: Investigate
+      self.acceleration_limits[robot_name] = robot.GetDOFAccelerationLimits()
+      if not self.change_active_manipulator(robot_name, manip_name, iktype_name):
+        self.logger.logwarn('Cannot change the active manipulator to (robot, manip, iktype): {0}, {1}, {2}'.format(robot_name, self.manipulator, self.iktype))
+        return None
+
+      # TODO: Investigate check raveutils.kinematics.load_link_stat
       self.update_link_stats(robot_name)
       # Check that the robots are not in collision
       qstart = robot.GetActiveDOFValues()
@@ -836,6 +905,7 @@ class PlanningManager():
         self.logger.logwarn('Robot is in self-collision: {0}'.format(robot_name) )
       elif self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.ENV_COLLISION:
         self.logger.logwarn('Robot is in collision with the environment: {0}'.format(robot_name) )
+
 #    # Gripper parameters
 #    self.gripper_parameters = dict(config['gripper'])
 #    # Get the body holes transformations
@@ -855,7 +925,8 @@ class PlanningManager():
 #      if self.env.CheckCollision(body):
 #        self.logger.logwarn('Object is in collision with the environment: {0}'.format(body.GetName()) )
 
-  def get_robot_iktypes(robot):
+  # TODO: Remove func?
+  def get_robot_iktypes(self, robot):
     # TODO: Modify docstring format
     # NOTE: I think this returns all the iksolvers (include all supported iktypes)
     #       that are available in the database
@@ -869,8 +940,7 @@ class PlanningManager():
     robot_iktypes = dict()
     for manip in robot.GetManipulators():
       iktypes = []
-      # TODO: Add SUPPORTED_IK_TYPES
-      for iktype in SUPPORTED_IK_TYPES:
+      for iktype in self.IK_TYPES:
         ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
         if ikmodel.load():
           iktypes.append(iktype)
@@ -986,7 +1056,7 @@ class PlanningManager():
     except:
       return False
     # Store the active iksolver parameters
-    self.iktype[robot_name] = orpy.IkParameterizationType.names[iktype_name]
+    self.iktypes[robot_name] = orpy.IkParameterizationType.names[iktype_name]
     self.dofindices[robot_name] = manipulator.GetArmIndices()
     robot.SetActiveDOFs(self.dofindices[robot_name])
     return True
@@ -1347,7 +1417,39 @@ class PlanningManager():
 #
 #  def is_valid(self):
 #    return hasattr(self, 'env')
-#
+
+  # TODO: Move TextColors
+  def parse_from_config(self, config, logger=criros.utils.TextColors()):
+    if not isinstance(config, dict):
+      logger.logwarn('Config is not a dict')
+      return
+    config_keys = set(config.keys())
+    for key in config_keys:
+      if hasattr(self, key):
+        setattr(self, key, config[key])
+    return True
+
+  def check_planning_validity(self):
+    # TODO Check variable type?
+    # TODO: Check manipulator is indeed belongs to robot
+    
+    # Check planner validity
+    if self.planner.lower() not in [x.lower() for x in self.PLANNERS]:
+      self.logger.logwarn('Invalid planner [{0}], using default planner: BiRRT'.format(self.planner))
+      self.planner = 'BiRRT'
+    # Check post-processing planner validity
+    if self.pp_planner.lower() not in [x.lower() for x in self.PP_PLANNERS]:
+      self.logger.logwarn('Invalid pp_planner [{0}], using default pp_planner: ParabolicSmoother '.format(self.pp_planner))
+      self.pp_planner = 'ParabolicSmoother'
+    # Crop velocity and acceleration factors
+    self.velocity_factor = max(0.01, min(self.velocity_factor, 1.0))
+    self.acceleration_factor = max(0.01, min(self.acceleration_factor, 1.0))
+    # TODO: Log/alert new velocity/acceleration factor
+    # If ikcretrion is BEST_INDEX then use only the translation part of the
+    # Jacobian to calculate the manipulation index
+    if self.ikcriterion==self.BEST_INDEX:
+      self.only_translation = True
+
 #  def merge_default_options(self, options):
 #    empty_msg = PlanningOptions()
 #    merged_msg = copy.deepcopy(options)
