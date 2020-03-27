@@ -81,10 +81,10 @@ class ManagerBase(object):
     # Start only the crucial sub-classes
     self.env = orpy.Environment()
     self.env_mng = EnvironmentManager(config['environment'], self.env)
+    self.pln_mng = PlanningManager(config['planning'],
+                   env_manager = self.env_mng)
     # RobotManager
     #TODO:self.rbt_mng = RobotManager(config['robot'])
-    #self.pln_mng = EnvironmentManager(config['planning'],
-    #               env_manager = self.env_mng)
     #self.exe_mng = EnvironmentManager(config['execution'], self.pln_mng)
 
 #class CollisionManager():
@@ -194,6 +194,8 @@ class EnvironmentManager():
               self.children[robotname].append(body.GetName())
     """
     # Move origin to reference body
+    # TODO: body name is currently upper/lowercase sensitive
+    #       or offer suggestions
     if config.has_key('reference_body'):
       for body in self.env.GetBodies():
         if body.GetName() == config['reference_body']:
@@ -726,74 +728,83 @@ class EnvironmentManager():
 #          sub_element.text = str(value)
 #    return etree.tostring(plan, pretty_print=True)
 
-#class PlanningManager():
-#  PLANNERS = ['BiRRT', 'BasicRRT']
-#  PP_PLANNERS = ['shortcut_linear', 'LinearTrajectoryRetimer', 'ParabolicTrajectoryRetimer', 'LinearSmoother', 'ParabolicSmoother']
-#  def __init__(self, config, env=None, env_manager=None, logger=rospy):
+class PlanningManager():
+  PLANNERS = ['BiRRT', 'BasicRRT']
+  PP_PLANNERS = ['shortcut_linear', 'LinearTrajectoryRetimer', 'ParabolicTrajectoryRetimer', 'LinearSmoother', 'ParabolicSmoother']
+  def __init__(self, config, env=None, env_manager=None, logger=rospy):
 #    self.axes = []
-#    self.logger = logger
-#    if env is None and env_manager is None:
-#      self.logger.logerr('Please provide an OpenRAVE environment or a EnvironmentManager')
-#      return
-#    elif env_manager is not None:
-#      if not env_manager.is_valid():
-#        self.logger.logerr('Please provide a valid EnvironmentManager')
-#        return
-#      else:
-#        self.env = env_manager.env
-#        self.env_manager = env_manager
-#    else:
-#      self.env = env
-#      self.env_manager = env_manager
-#    # Configure environment collision checker
+    self.logger = logger
+    if env is None and env_manager is None:
+      self.logger.logerr('Please provide an OpenRAVE environment or a EnvironmentManager')
+      return
+    elif env_manager is not None:
+      if not env_manager.is_valid():
+        self.logger.logerr('Please provide a valid EnvironmentManager')
+        return
+      else:
+        self.env = env_manager.env
+        self.env_manager = env_manager
+    else:
+      self.env = env
+      self.env_manager = env_manager
+    # Configure environment collision checker
 #    self.collision = CollisionManager(self.env, config['collision_checker'])
 #    if not self.collision.enable_collision_checking(True):
 #      self.logger.logwarn( 'Failed to enable collision checker: {0}'.format(self.collision.get_checker_name()) )
-#    # Load the default planning options
-#    self.default_options = PlanningOptions()
-#    genpy.message.fill_message_args(self.default_options, [config['default_options']])
-#    self.default_options = self.merge_default_options(self.default_options)
-#    # Load available IK solvers
-#    iktypes = []
-#    for robot_name in config['robots'].keys():
-#      robot = self.env.GetRobot(robot_name)
-#      if robot is None:
-#        self.logger.logwarn('Could not find robot in OpenRAVE: {0}'.format(robot_name))
-#        continue
-#      robot_iktypes = criros.raveutils.get_robot_iktypes(robot)
-#      for manip_name in robot_iktypes.keys():
-#        for iktype in robot_iktypes[manip_name]:
-#          iktypes.append((robot_name, manip_name, iktype))
-#    # Load available IK models
-#    self.ikmodels = dict()
-#    for robot_name, manip_name, iktype in iktypes:
-#      manip = self.env.GetRobot(robot_name).GetManipulator(manip_name)
-#      ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
-#      if not ikmodel.load():
-#        self.logger.logwarn('Failed to load IKFast {0} for manip {1}'.format(iktype.name, manip_name))
-#      else:
-#        key = (robot_name, manip_name, iktype.name)
-#        self.ikmodels[key] = ikmodel
-#    # Store initial robot configuration
-#    self.joint_names = dict()
-#    self.velocity_limits = dict()
-#    self.acceleration_limits = dict()
-#    # Active manipulator parameters
-#    self.iktype = dict()
-#    self.dofindices = dict()
-#    for robot_name in config['robots'].keys():
-#      robot = self.env.GetRobot(robot_name)
-#      self.joint_names[robot_name] = config['robots'][robot_name]['joint_names']
-#      self.velocity_limits[robot_name] = robot.GetDOFVelocityLimits()
-#      self.acceleration_limits[robot_name] = robot.GetDOFVelocityLimits()
-#      self.change_active_manipulator(robot_name, self.default_options.manipulator, self.default_options.iktype)
-#      self.update_link_stats(robot_name)
-#      # Check that the robots are not in collision
-#      qstart = robot.GetActiveDOFValues()
-#      if self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.SELF_COLLISION:
-#        self.logger.logwarn('Robot is in self-collision: {0}'.format(robot_name) )
-#      elif self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.ENV_COLLISION:
-#        self.logger.logwarn('Robot is in collision with the environment: {0}'.format(robot_name) )
+    # NOTE: Why involve rosmsg? My guess is to make it publishable
+    # Load the default planning options
+    self.default_options = PlanningOptions()
+    genpy.message.fill_message_args(self.default_options, [config['default_options']])
+    self.default_options = self.merge_default_options(self.default_options)
+    # Load available IK solvers
+    # NOTE: Load all available IK solvers (for all supported iktypes)
+    #       for all robot-manipulator permutations
+    # NOTE: Why load all iktypes for a particular robot-manipulator combi tho?
+    iktypes = []
+    for robot_name in config['robots'].keys():
+      robot = self.env.GetRobot(robot_name)
+      if robot is None:
+        self.logger.logwarn('Could not find robot in OpenRAVE: {0}'.format(robot_name))
+        continue
+      robot_iktypes = self.get_robot_iktypes(robot)
+      for manip_name in robot_iktypes.keys():
+        for iktype in robot_iktypes[manip_name]:
+          iktypes.append((robot_name, manip_name, iktype))
+    # Load available IK models
+    self.ikmodels = dict()
+    for robot_name, manip_name, iktype in iktypes:
+      manip = self.env.GetRobot(robot_name).GetManipulator(manip_name)
+      ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
+      if not ikmodel.load():
+        self.logger.logwarn('Failed to load IKFast {0} for manip {1}'.format(iktype.name, manip_name))
+      else:
+        key = (robot_name, manip_name, iktype.name)
+        self.ikmodels[key] = ikmodel
+    # Store initial robot configuration
+    self.joint_names = dict()
+    self.velocity_limits = dict()
+    self.acceleration_limits = dict()
+    # Active manipulator parameters
+    self.iktype = dict()
+    self.dofindices = dict()
+    for robot_name in config['robots'].keys():
+      robot = self.env.GetRobot(robot_name)
+      self.joint_names[robot_name] = config['robots'][robot_name]['joint_names']
+      self.velocity_limits[robot_name] = robot.GetDOFVelocityLimits()
+      self.acceleration_limits[robot_name] = robot.GetDOFVelocityLimits()
+      # NOTE: In here, every robot listed in config will have to use
+      #       the same manipulator and iktype in default_options?
+      #       Maybe check if user provided specific *manipulator* and 
+      #       *iktype* options under robot?
+      self.change_active_manipulator(robot_name, self.default_options.manipulator, self.default_options.iktype)
+      # TODO: Investigate
+      self.update_link_stats(robot_name)
+      # Check that the robots are not in collision
+      qstart = robot.GetActiveDOFValues()
+      if self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.SELF_COLLISION:
+        self.logger.logwarn('Robot is in self-collision: {0}'.format(robot_name) )
+      elif self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.ENV_COLLISION:
+        self.logger.logwarn('Robot is in collision with the environment: {0}'.format(robot_name) )
 #    # Gripper parameters
 #    self.gripper_parameters = dict(config['gripper'])
 #    # Get the body holes transformations
@@ -812,7 +823,30 @@ class EnvironmentManager():
 #        continue
 #      if self.env.CheckCollision(body):
 #        self.logger.logwarn('Object is in collision with the environment: {0}'.format(body.GetName()) )
-#
+
+  def get_robot_iktypes(robot):
+    # TODO: Modify docstring format
+    # NOTE: I think this returns all the iksolvers (include all supported iktypes)
+    #       that are available in the database
+    """
+    Returns a dict with the manipulator:[iktypes] pairs of available iksolvers .
+    @type  refbody: orpy.Robot
+    @param refbody: The OpenRAVE robot
+    @rtype: orpy.Environment
+    @return: The dict with the manipname:[iktypes] pairs.
+    """
+    robot_iktypes = dict()
+    for manip in robot.GetManipulators():
+      iktypes = []
+      # TODO: Add SUPPORTED_IK_TYPES
+      for iktype in SUPPORTED_IK_TYPES:
+        ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
+        if ikmodel.load():
+          iktypes.append(iktype)
+      if iktypes:
+        robot_iktypes[manip.GetName()] = list(iktypes)
+    return robot_iktypes
+
 #  def apply_plan(self, plan):
 #    # Check we have a valid plan
 #    if not self.check_plan_consistency(plan):
@@ -908,23 +942,23 @@ class EnvironmentManager():
 #      return None
 #    return traj
 #
-#  def change_active_manipulator(self, robot_name, manip_name, iktype_name):
-#    manip_key = (robot_name, manip_name, iktype_name)
-#    if manip_key not in self.ikmodels:
-#      return False
-#    robot = self.env.GetRobot(robot_name)
-#    if robot is None:
-#      return False
-#    try:
-#      manipulator = robot.SetActiveManipulator(manip_name)
-#      manipulator.SetIKSolver(self.ikmodels[manip_key].iksolver)
-#    except:
-#      return False
-#    # Store the active iksolver parameters
-#    self.iktype[robot_name] = orpy.IkParameterizationType.names[iktype_name]
-#    self.dofindices[robot_name] = manipulator.GetArmIndices()
-#    robot.SetActiveDOFs(self.dofindices[robot_name])
-#    return True
+  def change_active_manipulator(self, robot_name, manip_name, iktype_name):
+    manip_key = (robot_name, manip_name, iktype_name)
+    if manip_key not in self.ikmodels:
+      return False
+    robot = self.env.GetRobot(robot_name)
+    if robot is None:
+      return False
+    try:
+      manipulator = robot.SetActiveManipulator(manip_name)
+      manipulator.SetIKSolver(self.ikmodels[manip_key].iksolver)
+    except:
+      return False
+    # Store the active iksolver parameters
+    self.iktype[robot_name] = orpy.IkParameterizationType.names[iktype_name]
+    self.dofindices[robot_name] = manipulator.GetArmIndices()
+    robot.SetActiveDOFs(self.dofindices[robot_name])
+    return True
 #
 #  def clear_axes(self):
 #    del self.axes
@@ -1700,20 +1734,20 @@ class EnvironmentManager():
 #      return None
 #    return traj
 #
-#  def update_link_stats(self, robot_name):
-#    """
-#    Opens the robot's C{LinkStatisticsModel} database and updates the robot weights and resolutions.
-#    """
-#    robot = self.env.GetRobot(robot_name)
-#    statsmodel = orpy.databases.linkstatistics.LinkStatisticsModel(robot)
-#    if statsmodel.load():
-#      statsmodel.setRobotWeights()
-#      statsmodel.setRobotResolutions(xyzdelta=0.01)
-#    else:
-#      manip_name = robot.GetActiveManipulator().GetName()
-#      self.logger.logwarn('Link Statistics database was not found for robot: {0}, manipulator: {1}'.format(robot_name, manip_name))
-#      robot.SetDOFWeights([1]*robot.GetDOF())
-#
+  def update_link_stats(self, robot_name):
+    """
+    Opens the robot's C{LinkStatisticsModel} database and updates the robot weights and resolutions.
+    """
+    robot = self.env.GetRobot(robot_name)
+    statsmodel = orpy.databases.linkstatistics.LinkStatisticsModel(robot)
+    if statsmodel.load():
+      statsmodel.setRobotWeights()
+      statsmodel.setRobotResolutions(xyzdelta=0.01)
+    else:
+      manip_name = robot.GetActiveManipulator().GetName()
+      self.logger.logwarn('Link Statistics database was not found for robot: {0}, manipulator: {1}'.format(robot_name, manip_name))
+      robot.SetDOFWeights([1]*robot.GetDOF())
+
 #  def visualize_plan(self, plan):
 #    # Check we have a valid plan
 #    if not self.check_plan_consistency(plan):
