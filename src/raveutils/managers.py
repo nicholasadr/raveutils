@@ -827,41 +827,16 @@ class PlanningManager():
       return None
     # Check planning variables validity
     self.check_planning_validity()
-    # Load available IK solvers
-    # NOTE: Load all available IK solvers (for all supported iktypes)
-    #       for all robot-manipulator permutations
-    # NOTE: Why load all iktypes for a particular robot-manipulator combi tho?
-    """
-    iktypes = []
-    for robot_name in config['robots'].keys():
-      robot = self.env.GetRobot(robot_name)
-      if robot is None:
-        self.logger.logwarn('Could not find robot in OpenRAVE: {0}'.format(robot_name))
-        continue
-      robot_iktypes = self.get_robot_iktypes(robot)
-      for manip_name in robot_iktypes.keys():
-        for iktype in robot_iktypes[manip_name]:
-          iktypes.append((robot_name, manip_name, iktype))
-    # Load available IK models
-    self.ikmodels = dict()
-    for robot_name, manip_name, iktype in iktypes:
-      manip = self.env.GetRobot(robot_name).GetManipulator(manip_name)
-      # TODO: Why are we loading twice?
-      ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
-      if not ikmodel.load():
-        self.logger.logwarn('Failed to load IKFast {0} for manip {1}'.format(iktype.name, manip_name))
-      else:
-        key = (robot_name, manip_name, iktype.name)
-        self.ikmodels[key] = ikmodel
-    """
     # Store initial robot configuration
     self.joint_names = dict()
     self.velocity_limits = dict()
     self.acceleration_limits = dict()
     # Active manipulator parameters
+    self.ikmodels =dict()
     self.iktypes = dict()
     self.dofindices = dict()
     required_fields = ['manipulator','iktype','joint_names']
+    # TODO: Move below to a function
     for robot_name in config['robots'].keys():
       if not criutils.misc.has_keys(config['robots'][robot_name], required_fields):
         logger.logerr('Config dict does not have the required fields: {0}'.format(required_fields))
@@ -882,10 +857,22 @@ class PlanningManager():
 	logger.logerr('Iktype {0} of robot {1} is not supported'.format(
 	              iktype_name, robot_name))
 	return None
+      if iktype_name == 'TranslationDirection5D':
+	if not criutils.misc.has_keys(config['robots'][robot_name], ['freejoints']):
+	  logger.logwarn('TranslationDirection5D requires freejoint parameter. Setting to [J6]')
+	  freejoints = ['J6']
+        if not criutils.misc.has_keys(config['robots'][robot_name], ['freeinc']):
+          logger.logwarn('TranslationDirection5D requires freeinc parameter. Setting to [0.01]')
+	  freeinc = [0.01]
+      else:
+        freejoints = None
+        freeinc = None
       iktype = orpy.IkParameterizationType.names[iktype_name]
       # Load available IK models
-      ikmodel = raveutils.kinematics.get_ikmodel(robot, iktype, manip=manip)
-      if not raveutils.kinematics.load_ikmodel(ikmodel, iktype, autogenerate=True):
+      ikmodel = raveutils.kinematics.get_ikmodel(robot, iktype, manip=manip,
+	        freejoints=freejoints)
+      if not raveutils.kinematics.load_ikmodel(ikmodel, iktype,
+	     freejoints=freejoints, freeinc=freeinc, autogenerate=True):
 	logger.logerr('Failed to load IKFast for (robot, manip, iktype): {0}{1}{2}'.format(robot_name, manip, iktype))
         return None
       key = (robot_name, manip_name, iktype_name)
@@ -924,29 +911,6 @@ class PlanningManager():
 #        continue
 #      if self.env.CheckCollision(body):
 #        self.logger.logwarn('Object is in collision with the environment: {0}'.format(body.GetName()) )
-
-  # TODO: Remove func?
-  def get_robot_iktypes(self, robot):
-    # TODO: Modify docstring format
-    # NOTE: I think this returns all the iksolvers (include all supported iktypes)
-    #       that are available in the database
-    """
-    Returns a dict with the manipulator:[iktypes] pairs of available iksolvers .
-    @type  refbody: orpy.Robot
-    @param refbody: The OpenRAVE robot
-    @rtype: orpy.Environment
-    @return: The dict with the manipname:[iktypes] pairs.
-    """
-    robot_iktypes = dict()
-    for manip in robot.GetManipulators():
-      iktypes = []
-      for iktype in self.IK_TYPES:
-        ikmodel = orpy.databases.inversekinematics.InverseKinematicsModel(iktype=iktype, manip=manip)
-        if ikmodel.load():
-          iktypes.append(iktype)
-      if iktypes:
-        robot_iktypes[manip.GetName()] = list(iktypes)
-    return robot_iktypes
 
 #  def apply_plan(self, plan):
 #    # Check we have a valid plan
