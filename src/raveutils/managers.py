@@ -893,24 +893,69 @@ class PlanningManager():
       elif self.collision.check_robot_collisions(robot_name, qstart) == CollisionManager.ENV_COLLISION:
         self.logger.logwarn('Robot is in collision with the environment: {0}'.format(robot_name) )
 
-#    # Gripper parameters
-#    self.gripper_parameters = dict(config['gripper'])
-#    # Get the body holes transformations
-#    self.holes = dict()
-#    for body in self.env.GetBodies():
-#      if body.IsRobot():
-#        continue
-#      body_name = body.GetName()
-#      bholes = BodyHoles(body, relative=True, logger=self.logger)
-#      if bholes.get_num_holes() == 0:
-#        continue
-#      self.holes[body_name] = bholes.get_transforms()
-#    # Report bodies in collision
-#    for body in self.env.GetBodies():
-#      if body.IsRobot():
-#        continue
-#      if self.env.CheckCollision(body):
-#        self.logger.logwarn('Object is in collision with the environment: {0}'.format(body.GetName()) )
+  # TODO: Move TextColors
+  def parse_from_config(self, config, logger=criros.utils.TextColors()):
+    if not isinstance(config, dict):
+      logger.logwarn('Config is not a dict')
+      return
+    config_keys = set(config.keys())
+    for key in config_keys:
+      if hasattr(self, key):
+        setattr(self, key, config[key])
+    return True
+
+  def check_planning_validity(self):
+    # TODO Check variable type?
+    # TODO: Check manipulator is indeed belongs to robot
+    
+    # Check planner validity
+    if self.planner.lower() not in [x.lower() for x in self.PLANNERS]:
+      self.logger.logwarn('Invalid planner [{0}], using default planner: BiRRT'.format(self.planner))
+      self.planner = 'BiRRT'
+    # Check post-processing planner validity
+    if self.pp_planner.lower() not in [x.lower() for x in self.PP_PLANNERS]:
+      self.logger.logwarn('Invalid pp_planner [{0}], using default pp_planner: ParabolicSmoother '.format(self.pp_planner))
+      self.pp_planner = 'ParabolicSmoother'
+    # Crop velocity and acceleration factors
+    self.velocity_factor = max(0.01, min(self.velocity_factor, 1.0))
+    self.acceleration_factor = max(0.01, min(self.acceleration_factor, 1.0))
+    # TODO: Log/alert new velocity/acceleration factor
+    # If ikcretrion is BEST_INDEX then use only the translation part of the
+    # Jacobian to calculate the manipulation index
+    if self.ikcriterion==self.BEST_INDEX:
+      self.only_translation = True
+
+  def change_active_manipulator(self, robot_name, manip_name, iktype_name):
+    manip_key = (robot_name, manip_name, iktype_name)
+    if manip_key not in self.ikmodels:
+      return False
+    robot = self.env.GetRobot(robot_name)
+    if robot is None:
+      return False
+    try:
+      manipulator = robot.SetActiveManipulator(manip_name)
+      manipulator.SetIKSolver(self.ikmodels[manip_key].iksolver)
+    except:
+      return False
+    # Store the active iksolver parameters
+    self.iktypes[robot_name] = orpy.IkParameterizationType.names[iktype_name]
+    self.dofindices[robot_name] = manipulator.GetArmIndices()
+    robot.SetActiveDOFs(self.dofindices[robot_name])
+    return True
+
+  def update_link_stats(self, robot_name):
+    """
+    Opens the robot's C{LinkStatisticsModel} database and updates the robot weights and resolutions.
+    """
+    robot = self.env.GetRobot(robot_name)
+    statsmodel = orpy.databases.linkstatistics.LinkStatisticsModel(robot)
+    if statsmodel.load():
+      statsmodel.setRobotWeights()
+      statsmodel.setRobotResolutions(xyzdelta=0.01)
+    else:
+      manip_name = robot.GetActiveManipulator().GetName()
+      self.logger.logwarn('Link Statistics database was not found for robot: {0}, manipulator: {1}'.format(robot_name, manip_name))
+      robot.SetDOFWeights([1]*robot.GetDOF())
 
 #  def apply_plan(self, plan):
 #    # Check we have a valid plan
@@ -932,7 +977,7 @@ class PlanningManager():
 #      else:
 #        self.visualize_step(step)
 #    return True
-#
+
 #  def balance_body_transform(self, start, goal, weights=[1.,10.]):
 #    transform_inv = criros.spalg.transform_inv
 #    def obj_func(x, T0, Tleft, Tright):
@@ -973,7 +1018,7 @@ class PlanningManager():
 #    opt.qleft = np.array(goal.qleft)
 #    opt.qright = np.array(goal.qright)
 #    return opt, twist
-#
+
 #  def bimanual_trajectory(self, bimanual_config, options):
 #    # Plan multiple robots
 #    robot1 = self.env.GetRobot(bimanual_config[0][0])
@@ -1007,28 +1052,11 @@ class PlanningManager():
 #      return None
 #    return traj
 #
-  def change_active_manipulator(self, robot_name, manip_name, iktype_name):
-    manip_key = (robot_name, manip_name, iktype_name)
-    if manip_key not in self.ikmodels:
-      return False
-    robot = self.env.GetRobot(robot_name)
-    if robot is None:
-      return False
-    try:
-      manipulator = robot.SetActiveManipulator(manip_name)
-      manipulator.SetIKSolver(self.ikmodels[manip_key].iksolver)
-    except:
-      return False
-    # Store the active iksolver parameters
-    self.iktypes[robot_name] = orpy.IkParameterizationType.names[iktype_name]
-    self.dofindices[robot_name] = manipulator.GetArmIndices()
-    robot.SetActiveDOFs(self.dofindices[robot_name])
-    return True
-#
+
 #  def clear_axes(self):
 #    del self.axes
 #    self.axes = []
-#
+
 #  def compute_velocity_from_pose(self, robot_name, target_pose, qrobot=None, enforce_limits=True):
 #    robot = self.env.GetRobot(robot_name)
 #    manipulator = robot.GetActiveManipulator()
@@ -1381,38 +1409,6 @@ class PlanningManager():
 #
 #  def is_valid(self):
 #    return hasattr(self, 'env')
-
-  # TODO: Move TextColors
-  def parse_from_config(self, config, logger=criros.utils.TextColors()):
-    if not isinstance(config, dict):
-      logger.logwarn('Config is not a dict')
-      return
-    config_keys = set(config.keys())
-    for key in config_keys:
-      if hasattr(self, key):
-        setattr(self, key, config[key])
-    return True
-
-  def check_planning_validity(self):
-    # TODO Check variable type?
-    # TODO: Check manipulator is indeed belongs to robot
-    
-    # Check planner validity
-    if self.planner.lower() not in [x.lower() for x in self.PLANNERS]:
-      self.logger.logwarn('Invalid planner [{0}], using default planner: BiRRT'.format(self.planner))
-      self.planner = 'BiRRT'
-    # Check post-processing planner validity
-    if self.pp_planner.lower() not in [x.lower() for x in self.PP_PLANNERS]:
-      self.logger.logwarn('Invalid pp_planner [{0}], using default pp_planner: ParabolicSmoother '.format(self.pp_planner))
-      self.pp_planner = 'ParabolicSmoother'
-    # Crop velocity and acceleration factors
-    self.velocity_factor = max(0.01, min(self.velocity_factor, 1.0))
-    self.acceleration_factor = max(0.01, min(self.acceleration_factor, 1.0))
-    # TODO: Log/alert new velocity/acceleration factor
-    # If ikcretrion is BEST_INDEX then use only the translation part of the
-    # Jacobian to calculate the manipulation index
-    if self.ikcriterion==self.BEST_INDEX:
-      self.only_translation = True
 
 #  def merge_default_options(self, options):
 #    empty_msg = PlanningOptions()
@@ -1830,20 +1826,6 @@ class PlanningManager():
 #      self.logger.logwarn('Failed to plan trajectory without postprocessing.')
 #      return None
 #    return traj
-#
-  def update_link_stats(self, robot_name):
-    """
-    Opens the robot's C{LinkStatisticsModel} database and updates the robot weights and resolutions.
-    """
-    robot = self.env.GetRobot(robot_name)
-    statsmodel = orpy.databases.linkstatistics.LinkStatisticsModel(robot)
-    if statsmodel.load():
-      statsmodel.setRobotWeights()
-      statsmodel.setRobotResolutions(xyzdelta=0.01)
-    else:
-      manip_name = robot.GetActiveManipulator().GetName()
-      self.logger.logwarn('Link Statistics database was not found for robot: {0}, manipulator: {1}'.format(robot_name, manip_name))
-      robot.SetDOFWeights([1]*robot.GetDOF())
 
 #  def visualize_plan(self, plan):
 #    # Check we have a valid plan
